@@ -1,0 +1,16 @@
+[Unit]
+Description=Feishu bridge for Codex App Server
+After=network-online.target tmux-bridge-appserver.service
+Wants=network-online.target tmux-bridge-appserver.service
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT@
+EnvironmentFile=-@ROOT@/.appserver.env
+ExecStartPre=/usr/bin/test -S @SOCKET@
+ExecStart=@ROOT@/start.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

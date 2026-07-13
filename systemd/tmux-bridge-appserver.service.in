@@ -1,0 +1,15 @@
+[Unit]
+Description=Codex App Server for tmux-bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=CODEX_HOME=@CODEX_HOME@
+EnvironmentFile=-@ROOT@/.appserver.env
+ExecStart=@CODEX_BIN@ app-server --listen unix://@SOCKET@
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

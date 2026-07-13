@@ -1,0 +1,11 @@
+.env
+.appserver.env
+.runtime.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+state/
