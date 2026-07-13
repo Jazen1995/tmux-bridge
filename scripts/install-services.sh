@@ -29,10 +29,12 @@ if [[ "$APP_SERVER_SOCKET" != /* ]]; then
   echo "APP_SERVER_SOCKET 必须是绝对路径: $APP_SERVER_SOCKET" >&2
   exit 1
 fi
-if [[ "$ROOT $CODEX_PATH $CODEX_HOME $APP_SERVER_SOCKET" =~ [[:space:]] ]]; then
-  echo "当前安装脚本暂不支持路径中包含空白字符" >&2
-  exit 1
-fi
+for path in "$ROOT" "$CODEX_PATH" "$CODEX_HOME" "$APP_SERVER_SOCKET"; do
+  if [[ "$path" =~ [[:space:]] ]]; then
+    echo "当前安装脚本暂不支持路径中包含空白字符: $path" >&2
+    exit 1
+  fi
+done
 
 mkdir -p "$USER_UNITS" "$(dirname "$APP_SERVER_SOCKET")"
 chmod 600 "$ROOT/.env"
