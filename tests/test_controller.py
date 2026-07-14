@@ -361,11 +361,72 @@ def test_dir_and_detach_match_tmux_cc_interaction(tmp_path):
     controller.handle_message("chat", "dir")
     assert messenger.cards[-1][2]["title"] == "demo"
     assert f"**pwd:** `{tmp_path}`" in messenger.cards[-1][2]["content"]
-    assert "  alpha/" in messenger.cards[-1][2]["content"]
+    assert "**1.** alpha/" in messenger.cards[-1][2]["content"]
+    assert "回复数字快速进入文件夹" in messenger.cards[-1][2]["content"]
+
+    controller.handle_message("chat", "1")
+    assert store.get("chat")["cwd"] == str(tmp_path / "alpha")
+    assert f"**pwd:** `{tmp_path / 'alpha'}`" in messenger.cards[-1][2]["content"]
 
     controller.handle_message("chat", "td")
     assert messenger.texts[-1][1] == "已断开: demo"
     assert store.get("chat")["thread_id"] is None
+    controller.close()
+
+
+def test_pwd_number_selection_uses_sorted_folders_and_can_drill_down(tmp_path):
+    controller, _, messenger, store, _ = make_controller(tmp_path)
+    alpha = tmp_path / "alpha"
+    beta = tmp_path / "beta"
+    nested = alpha / "nested"
+    beta.mkdir()
+    nested.mkdir(parents=True)
+
+    controller.handle_message("chat", "pwd")
+    content = messenger.cards[-1][2]["content"]
+    assert content.index("**1.** alpha/") < content.index("**2.** beta/")
+
+    controller.handle_message("chat", "1")
+    assert store.get("chat")["cwd"] == str(alpha)
+    assert "**1.** nested/" in messenger.cards[-1][2]["content"]
+
+    controller.handle_message("chat", "1")
+    assert store.get("chat")["cwd"] == str(nested)
+    controller.close()
+
+
+def test_latest_numbered_menu_wins_and_unrelated_message_expires_it(tmp_path):
+    controller, app, messenger, store, tmux = make_controller(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    app.threads.append({
+        "id": "thread-1",
+        "name": "managed",
+        "cwd": str(tmp_path),
+        "status": {"type": "idle"},
+    })
+    store.update("chat", thread_id="thread-1", thread_name="managed", cwd=str(tmp_path))
+    tmux.listed = [TmuxSession("managed", "thread-1", str(tmp_path))]
+
+    controller.handle_message("chat", "tls")
+    controller.handle_message("chat", "pwd")
+    controller.handle_message("chat", "1")
+    assert store.get("chat")["cwd"] == str(project)
+
+    controller.handle_message("chat", "cd ..")
+    controller.handle_message("chat", "pwd")
+    controller.handle_message("chat", "普通任务")
+    controller.handle_message("chat", "1")
+    controller.on_appserver_event({
+        "method": "turn/completed",
+        "params": {
+            "threadId": "thread-1",
+            "turn": {"id": "turn-1", "status": "completed", "durationMs": 10},
+        },
+    })
+
+    assert [turn["text"] for turn in app.turns[-2:]] == ["普通任务", "1"]
+    assert messenger.texts == []
     controller.close()
 
 

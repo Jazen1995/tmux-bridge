@@ -8,7 +8,7 @@ import shlex
 import threading
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from appserver import AppServerClient, AppServerError, RpcError
 from events import TurnView, render_thread_history
@@ -33,7 +33,7 @@ HELP_TEXT = """\
 
 **目录导航：**
 - `cd <路径>` — 切换工作目录（`..` 返回上层，空参数回到默认目录）
-- `pwd` / `dir` — 查看当前工作目录和子文件夹
+- `pwd` / `dir` — 查看并编号展示子文件夹（回复数字快速进入）
 
 **查看与控制：**
 - `view` — 查看最近三轮原生对话
@@ -81,6 +81,12 @@ class Submission:
     message_id: str | None
 
 
+@dataclass(frozen=True)
+class NumericSelection:
+    kind: Literal["session", "directory"]
+    values: tuple[TmuxSession | str, ...]
+
+
 class BotController:
     def __init__(
         self,
@@ -103,7 +109,7 @@ class BotController:
         self._feishu_turns: set[tuple[str, str]] = set()
         self._drafts: dict[str, Submission] = {}
         self._queues: dict[str, deque[Submission]] = defaultdict(deque)
-        self._session_lists: dict[str, list[TmuxSession]] = {}
+        self._numeric_selections: dict[str, NumericSelection] = {}
         self._closing = threading.Event()
         self._tmux_reconciler: threading.Thread | None = None
         appserver.add_notification_handler(self.on_appserver_event)
@@ -154,12 +160,18 @@ class BotController:
             text = "/" + text
 
         try:
+            if text.isdigit() and chat_id in self._numeric_selections:
+                self._select_index(chat_id, int(text) - 1)
+                return
+
+            # A numbered menu only applies to the immediately following choice.
+            # Any other message replaces it with normal command/task semantics.
+            self._numeric_selections.pop(chat_id, None)
+
             if text == "/help":
                 self._send_info(chat_id, "tmux-bridge 帮助", HELP_TEXT)
             elif text == "/tls":
                 self._list_sessions(chat_id)
-            elif text.isdigit() and self._session_lists.get(chat_id):
-                self._attach_index(chat_id, int(text) - 1)
             elif text.startswith("/ta "):
                 self._attach(chat_id, text[4:].strip())
             elif text == "/ta":
@@ -214,9 +226,20 @@ class BotController:
 
     def _list_sessions(self, chat_id: str) -> None:
         sessions = self.tmux.list_sessions()
-        self._session_lists[chat_id] = sessions
+        self._set_numeric_selection(chat_id, "session", sessions)
         content = self._format_session_list(chat_id, sessions)
         self._send_info(chat_id, "会话列表", content)
+
+    def _set_numeric_selection(
+        self,
+        chat_id: str,
+        kind: Literal["session", "directory"],
+        values: list[TmuxSession] | list[str],
+    ) -> None:
+        if values:
+            self._numeric_selections[chat_id] = NumericSelection(kind, tuple(values))
+        else:
+            self._numeric_selections.pop(chat_id, None)
 
     def _format_session_list(self, chat_id: str, sessions: list[TmuxSession]) -> str:
         if not sessions:
@@ -229,12 +252,27 @@ class BotController:
         lines.append("\n回复数字快速连接。")
         return "\n".join(lines)
 
-    def _attach_index(self, chat_id: str, index: int) -> None:
-        sessions = self._session_lists.get(chat_id, [])
-        if not (0 <= index < len(sessions)):
-            self.messenger.send_text(chat_id, f"无效数字，请输入 1-{len(sessions)}")
+    def _select_index(self, chat_id: str, index: int) -> None:
+        selection = self._numeric_selections.get(chat_id)
+        if selection is None:
             return
-        session = sessions[index]
+        if not (0 <= index < len(selection.values)):
+            self.messenger.send_text(
+                chat_id,
+                f"无效数字，请输入 1-{len(selection.values)}",
+            )
+            return
+
+        self._numeric_selections.pop(chat_id, None)
+        selected = selection.values[index]
+        if selection.kind == "directory":
+            self.store.update(chat_id, cwd=str(selected))
+            self._show_pwd(chat_id)
+            return
+
+        if not isinstance(selected, TmuxSession):
+            raise TypeError("session selection must contain TmuxSession values")
+        session = selected
         if not session.managed:
             self.messenger.send_text(
                 chat_id,
@@ -373,7 +411,7 @@ class BotController:
         else:
             self.tmux.close_named_session(name)
         remaining = self.tmux.list_sessions()
-        self._session_lists[chat_id] = remaining
+        self._set_numeric_selection(chat_id, "session", remaining)
         self.messenger.send_card(
             chat_id,
             title="Tmux Sessions",
@@ -417,9 +455,20 @@ class BotController:
         if dirs is None:
             directory_list = "  (cannot read directory)"
         elif dirs:
-            directory_list = "\n".join(f"  {item}/" for item in dirs[:80])
+            dirs = dirs[:80]
+            directory_list = "\n".join(
+                f"**{index}.** {item}/" for index, item in enumerate(dirs, 1)
+            )
+            self._set_numeric_selection(
+                chat_id,
+                "directory",
+                [os.path.abspath(os.path.join(cwd, item)) for item in dirs],
+            )
+            directory_list += "\n\n回复数字快速进入文件夹。"
         else:
             directory_list = "  (no subdirectories)"
+        if not dirs:
+            self._numeric_selections.pop(chat_id, None)
         state = self.store.get(chat_id)
         title = state.get("thread_name") or "Tmux Bridge"
         self._send_info(
