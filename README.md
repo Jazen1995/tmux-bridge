@@ -46,11 +46,17 @@ tmux 中的 Codex TUI ────┘
 ## 安装
 
 ```bash
-git clone git@code.byted.org:wangzhenjia/tmux-bridge.git
+git clone https://github.com/Jazen1995/tmux-bridge.git
 cd tmux-bridge
 
 cp .env.example .env
 chmod 600 .env
+```
+
+字节内网也可以从 Codebase 克隆：
+
+```bash
+git clone git@code.byted.org:wangzhenjia/tmux-bridge.git
 ```
 
 编辑 `.env`：
