@@ -334,7 +334,12 @@ class BotController:
         )
         tmux_result = self._ensure_local_session(name, thread["id"], cwd)
         history = self.appserver.read_thread(thread["id"], include_turns=True)
-        if self._hydrate_active_turn(history, name, [chat_id]):
+        if self._hydrate_active_turn(
+            history,
+            name,
+            [chat_id],
+            create_new_cards=True,
+        ):
             return
         footer = tmux_result.message or "Codex 原生会话"
         self.messenger.send_card(
@@ -351,8 +356,14 @@ class BotController:
         thread: dict[str, Any],
         thread_name: str,
         chat_ids: list[str],
+        *,
+        create_new_cards: bool = False,
     ) -> bool:
-        """Attach late subscribers to the current native turn without replaying it."""
+        """Attach subscribers to the current native turn without replaying it.
+
+        Explicit session selection creates a new card at the current position in
+        the chat. Startup recovery may keep updating an already known card.
+        """
         active_turn = next(
             (
                 turn
@@ -378,7 +389,7 @@ class BotController:
             self._active_turn[thread_id] = view.turn_id
 
             for chat_id in chat_ids:
-                message_id = runtime.cards.get(chat_id)
+                message_id = None if create_new_cards else runtime.cards.get(chat_id)
                 if message_id:
                     self.card_updater.submit(message_id, **self._view_card(view))
                     continue

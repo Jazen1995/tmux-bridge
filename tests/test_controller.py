@@ -329,6 +329,73 @@ def test_attach_to_running_session_hydrates_prefix_and_continues_live_card(tmp_p
     controller.close()
 
 
+def test_reselect_running_session_pushes_new_card_and_moves_live_updates(tmp_path):
+    controller, app, messenger, store, tmux = make_controller(tmp_path)
+    app.threads.extend([
+        {
+            "id": "thread-live",
+            "name": "live",
+            "cwd": str(tmp_path),
+            "status": {"type": "active"},
+            "turns": [{
+                "id": "turn-live",
+                "status": "inProgress",
+                "items": [
+                    {
+                        "type": "userMessage",
+                        "content": [{"type": "text", "text": "执行长任务"}],
+                    },
+                    {"type": "agentMessage", "text": "已有输出"},
+                ],
+            }],
+        },
+        {
+            "id": "thread-other",
+            "name": "other",
+            "cwd": str(tmp_path),
+            "status": {"type": "idle"},
+        },
+    ])
+    tmux.listed = [
+        TmuxSession("live", "thread-live", str(tmp_path)),
+        TmuxSession("other", "thread-other", str(tmp_path)),
+    ]
+
+    controller.handle_message("chat", "tls")
+    controller.handle_message("chat", "1")
+    first_live_card_id = messenger.cards[-1][1]
+
+    controller.handle_message("chat", "tls")
+    controller.handle_message("chat", "2")
+    controller.handle_message("chat", "tls")
+    controller.handle_message("chat", "1")
+
+    second_live_card = messenger.cards[-1]
+    assert second_live_card[1] != first_live_card_id
+    assert second_live_card[2]["prompt"] == "执行长任务"
+    assert second_live_card[2]["content"] == "已有输出"
+
+    controller.on_appserver_event({
+        "method": "item/agentMessage/delta",
+        "params": {
+            "threadId": "thread-live",
+            "turnId": "turn-live",
+            "delta": "，继续输出",
+        },
+    })
+    assert wait_for(lambda: any(
+        message_id == second_live_card[1]
+        and card["content"] == "已有输出，继续输出"
+        for message_id, card in messenger.updates
+    ))
+    assert not any(
+        message_id == first_live_card_id
+        and card["content"] == "已有输出，继续输出"
+        for message_id, card in messenger.updates
+    )
+    controller.close()
+
+
 def test_start_hydrates_running_bound_thread(tmp_path):
     controller, app, messenger, store, _ = make_controller(tmp_path)
     app.threads.append({
