@@ -19,6 +19,30 @@ def _compact(value: str, limit: int = 180) -> str:
     return value if len(value) <= limit else value[: limit - 1] + "…"
 
 
+def _reasoning_text(item: dict[str, Any]) -> str:
+    value = item.get("summary") or item.get("content") or item.get("text") or ""
+    if isinstance(value, list):
+        return _content_text(value)
+    return str(value).strip()
+
+
+def _merge_stream_text(snapshot: str, live: str) -> str:
+    """Merge a persisted prefix with deltas that may race the snapshot read."""
+    if not snapshot:
+        return live
+    if not live or snapshot == live:
+        return snapshot
+    if snapshot.startswith(live):
+        return snapshot
+    if live.startswith(snapshot):
+        return live
+    overlap_limit = min(len(snapshot), len(live))
+    for size in range(overlap_limit, 0, -1):
+        if snapshot.endswith(live[:size]):
+            return snapshot + live[size:]
+    return snapshot + live
+
+
 @dataclass
 class TurnView:
     thread_id: str
@@ -91,6 +115,27 @@ class TurnView:
             return True
         return False
 
+    def merge_live(self, live: "TurnView") -> None:
+        """Merge notifications received while a history snapshot was loading."""
+        if (self.thread_id, self.turn_id) != (live.thread_id, live.turn_id):
+            raise ValueError("cannot merge different turns")
+        self.user_text = self.user_text or live.user_text
+        self.answer = _merge_stream_text(self.answer, live.answer)
+        self.reasoning = _merge_stream_text(self.reasoning, live.reasoning)
+        for activity in live.activities:
+            base = activity.rsplit(" · ", 1)[0]
+            self.activities = [
+                current
+                for current in self.activities
+                if current.rsplit(" · ", 1)[0] != base
+            ]
+            self.activities.append(activity)
+        self.activities = self.activities[-8:]
+        if live.finished or live.status != "running":
+            self.status = live.status
+            self.error = live.error
+            self.duration_ms = live.duration_ms
+
     @staticmethod
     def _activity(item: dict[str, Any], completed: bool) -> str | None:
         item_type = item.get("type", "")
@@ -152,6 +197,43 @@ class TurnView:
         if self.finished:
             return "blue"
         return "orange"
+
+
+def turn_view_from_history(
+    thread_id: str,
+    turn: dict[str, Any],
+    thread_name: str = "Codex",
+) -> TurnView:
+    """Rebuild a live card view from a native ``thread/read`` turn snapshot."""
+    status = {
+        "inProgress": "running",
+        "active": "running",
+        "canceled": "aborted",
+    }.get(turn.get("status"), turn.get("status") or "running")
+    view = TurnView(
+        thread_id=thread_id,
+        turn_id=turn["id"],
+        thread_name=thread_name,
+        status=status,
+        duration_ms=turn.get("durationMs"),
+    )
+    error = turn.get("error")
+    if error:
+        view.error = error.get("message") if isinstance(error, dict) else str(error)
+
+    for item in turn.get("items") or []:
+        if item.get("type") == "reasoning":
+            reasoning = _reasoning_text(item)
+            if reasoning:
+                view.reasoning = reasoning
+            continue
+        item_status = item.get("status")
+        completed = item_status not in {"inProgress", "running", "pending"}
+        view.apply({
+            "method": "item/completed" if completed else "item/started",
+            "params": {"item": item},
+        })
+    return view
 
 
 def render_thread_history(thread: dict[str, Any], limit: int = 5) -> str:

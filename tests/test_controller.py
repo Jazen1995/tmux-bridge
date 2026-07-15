@@ -258,6 +258,108 @@ def test_attach_by_tmux_name_opens_same_native_thread(tmp_path):
     controller.close()
 
 
+def test_attach_to_running_session_hydrates_prefix_and_continues_live_card(tmp_path):
+    controller, app, messenger, store, tmux = make_controller(tmp_path)
+    app.threads.append({
+        "id": "thread-live",
+        "name": "live",
+        "cwd": str(tmp_path),
+        "status": {"type": "active"},
+        "turns": [{
+            "id": "turn-live",
+            "status": "inProgress",
+            "items": [
+                {
+                    "type": "userMessage",
+                    "content": [{"type": "text", "text": "执行长任务"}],
+                },
+                {"type": "agentMessage", "text": "已经完成一半"},
+                {
+                    "type": "commandExecution",
+                    "command": "pytest -q",
+                    "status": "completed",
+                    "exitCode": 0,
+                },
+            ],
+        }],
+    })
+    tmux.listed = [TmuxSession("live", "thread-live", str(tmp_path))]
+
+    controller.handle_message("chat", "tls")
+    controller.handle_message("chat", "1")
+
+    card = messenger.cards[-1][2]
+    assert store.get("chat")["thread_id"] == "thread-live"
+    assert card["title"] == "live"
+    assert card["prompt"] == "执行长任务"
+    assert card["content"] == "已经完成一半"
+    assert "pytest -q" in card["activity"]
+    assert card["footer"] == "Codex 工作中"
+    assert card["template"] == "orange"
+
+    controller.on_appserver_event({
+        "method": "item/agentMessage/delta",
+        "params": {
+            "threadId": "thread-live",
+            "turnId": "turn-live",
+            "delta": "，继续输出",
+        },
+    })
+    assert wait_for(lambda: any(
+        update[1]["content"] == "已经完成一半，继续输出"
+        for update in messenger.updates
+    ))
+
+    controller.on_appserver_event({
+        "method": "turn/completed",
+        "params": {
+            "threadId": "thread-live",
+            "turn": {
+                "id": "turn-live",
+                "status": "completed",
+                "durationMs": 5000,
+            },
+        },
+    })
+    assert wait_for(lambda: any(
+        update[1]["footer"] == "Codex 已完成 · 5.0s"
+        for update in messenger.updates
+    ))
+    assert tmux.refreshed == []
+    controller.close()
+
+
+def test_start_hydrates_running_bound_thread(tmp_path):
+    controller, app, messenger, store, _ = make_controller(tmp_path)
+    app.threads.append({
+        "id": "thread-live",
+        "name": "live",
+        "cwd": str(tmp_path),
+        "status": {"type": "active"},
+        "turns": [{
+            "id": "turn-live",
+            "status": "inProgress",
+            "items": [
+                {
+                    "type": "userMessage",
+                    "content": [{"type": "text", "text": "重启前任务"}],
+                },
+                {"type": "agentMessage", "text": "恢复已有输出"},
+            ],
+        }],
+    })
+    store.update("chat", thread_id="thread-live", thread_name="live")
+    controller.tmux_reconcile_interval = 0
+
+    controller.start()
+
+    card = messenger.cards[-1][2]
+    assert card["prompt"] == "重启前任务"
+    assert card["content"] == "恢复已有输出"
+    assert card["footer"] == "Codex 工作中"
+    controller.close()
+
+
 def test_start_restores_bound_thread_and_local_window(tmp_path):
     controller, app, _, store, tmux = make_controller(tmp_path)
     app.threads.append({

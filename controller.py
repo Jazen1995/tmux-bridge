@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from appserver import AppServerClient, AppServerError, RpcError
-from events import TurnView, render_thread_history
+from events import TurnView, render_thread_history, turn_view_from_history
 from larkui import CardUpdater
 from state import StateStore
 from tmux_ui import TmuxSession, TmuxUIManager
@@ -131,7 +131,12 @@ class BotController:
                 self._ensure_local_session(name, thread_id, cwd)
                 status = (thread.get("status") or {})
                 if status.get("type") == "active":
-                    self._active_turn[thread_id] = "external"
+                    history = self.appserver.read_thread(thread_id, include_turns=True)
+                    self._hydrate_active_turn(
+                        history,
+                        name,
+                        [chat_id for chat_id, _ in bindings],
+                    )
             except AppServerError:
                 logger.exception("Unable to restore thread %s", thread_id)
         if self.tmux_reconcile_interval > 0:
@@ -329,6 +334,8 @@ class BotController:
         )
         tmux_result = self._ensure_local_session(name, thread["id"], cwd)
         history = self.appserver.read_thread(thread["id"], include_turns=True)
+        if self._hydrate_active_turn(history, name, [chat_id]):
+            return
         footer = tmux_result.message or "Codex 原生会话"
         self.messenger.send_card(
             chat_id,
@@ -338,6 +345,47 @@ class BotController:
             footer=footer,
             template="blue",
         )
+
+    def _hydrate_active_turn(
+        self,
+        thread: dict[str, Any],
+        thread_name: str,
+        chat_ids: list[str],
+    ) -> bool:
+        """Attach late subscribers to the current native turn without replaying it."""
+        active_turn = next(
+            (
+                turn
+                for turn in reversed(thread.get("turns") or [])
+                if turn.get("status") == "inProgress"
+            ),
+            None,
+        )
+        if active_turn is None:
+            return False
+
+        thread_id = thread["id"]
+        view = turn_view_from_history(thread_id, active_turn, thread_name)
+        key = (thread_id, view.turn_id)
+        with self._lock:
+            runtime = self._runtimes.get(key)
+            if runtime is None:
+                runtime = TurnRuntime(view)
+                self._runtimes[key] = runtime
+            else:
+                view.merge_live(runtime.view)
+                runtime.view = view
+            self._active_turn[thread_id] = view.turn_id
+
+            for chat_id in chat_ids:
+                message_id = runtime.cards.get(chat_id)
+                if message_id:
+                    self.card_updater.submit(message_id, **self._view_card(view))
+                    continue
+                message_id = self.messenger.send_card(chat_id, **self._view_card(view))
+                if message_id:
+                    runtime.cards[chat_id] = message_id
+        return True
 
     def _new_thread(self, chat_id: str, arguments: str) -> None:
         parts = shlex.split(arguments)

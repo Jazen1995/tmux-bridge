@@ -1,4 +1,4 @@
-from events import TurnView, render_thread_history
+from events import TurnView, render_thread_history, turn_view_from_history
 
 
 def event(method, **params):
@@ -80,3 +80,65 @@ def test_render_thread_history_reads_native_items_without_terminal_parser():
 
     assert "**你**\n问题" in rendered
     assert "**Codex**\n答案" in rendered
+
+
+def test_active_turn_snapshot_rebuilds_task_output_reasoning_and_activity():
+    view = turn_view_from_history("thread-1", {
+        "id": "turn-live",
+        "status": "inProgress",
+        "durationMs": None,
+        "items": [
+            {
+                "type": "userMessage",
+                "content": [{"type": "text", "text": "执行长任务"}],
+            },
+            {"type": "reasoning", "summary": [{"type": "text", "text": "先检查状态"}]},
+            {
+                "type": "commandExecution",
+                "command": "pytest -q",
+                "status": "completed",
+                "exitCode": 0,
+            },
+            {"type": "agentMessage", "text": "已经完成一半"},
+        ],
+    }, "demo")
+
+    assert view.turn_id == "turn-live"
+    assert view.user_text == "执行长任务"
+    assert view.answer == "已经完成一半"
+    assert view.reasoning == "先检查状态"
+    assert view.activities == ["命令 · pytest -q · 退出码 0"]
+    assert view.status == "running"
+    assert view.footer() == "Codex 工作中"
+    assert not view.finished
+
+
+def test_history_snapshot_keeps_newer_live_delta_and_terminal_state():
+    snapshot = turn_view_from_history("thread-1", {
+        "id": "turn-live",
+        "status": "inProgress",
+        "items": [
+            {
+                "type": "userMessage",
+                "content": [{"type": "text", "text": "长任务"}],
+            },
+            {"type": "agentMessage", "text": "已经完成一半"},
+            {
+                "type": "commandExecution",
+                "command": "pytest -q",
+                "status": "inProgress",
+            },
+        ],
+    })
+    live = TurnView("thread-1", "turn-live")
+    live.answer = "一半，继续输出"
+    live.activities = ["命令 · pytest -q · 退出码 0"]
+    live.status = "completed"
+    live.duration_ms = 5000
+
+    snapshot.merge_live(live)
+
+    assert snapshot.answer == "已经完成一半，继续输出"
+    assert snapshot.activities == ["命令 · pytest -q · 退出码 0"]
+    assert snapshot.status == "completed"
+    assert snapshot.duration_ms == 5000
