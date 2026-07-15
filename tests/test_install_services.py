@@ -62,6 +62,7 @@ def test_installer_renders_units_from_current_clone_without_fixed_paths(tmp_path
     units = tmp_path / "config/systemd/user"
     bridge = (units / "tmux-bridge.service").read_text(encoding="utf-8")
     appserver = (units / "tmux-bridge-appserver.service").read_text(encoding="utf-8")
+    runtime = (project / ".runtime.env").read_text(encoding="utf-8")
     assert f"WorkingDirectory={project}" in bridge
     assert f"ExecStart={project}/start.sh" in bridge
     assert f"ExecStart={codex} app-server" in appserver
@@ -69,3 +70,5 @@ def test_installer_renders_units_from_current_clone_without_fixed_paths(tmp_path
     assert str(socket_path) in appserver
     assert "@ROOT@" not in bridge + appserver
     assert "/data00/home/" not in bridge + appserver
+    assert f"CODEX_BIN={codex}" in runtime
+    assert f"TMUX_BRIDGE_PATH={fake_bin}:/usr/bin:/bin" in runtime

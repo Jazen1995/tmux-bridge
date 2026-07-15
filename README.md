@@ -83,7 +83,9 @@ systemctl --user status tmux-bridge-appserver tmux-bridge
 ```
 
 安装脚本会根据当前 clone 目录和本机 Codex CLI 的绝对路径生成用户级 systemd 配置，
-不会依赖某个固定用户名或安装目录。飞书凭据只保存在 Git 忽略的 `.env` 中。
+不会依赖某个固定用户名或安装目录。它还会保存当前登录环境的工具 `PATH`，让 tmux
+中的 Codex 能直接使用 `codebase`、`node` 等开发工具；新增工具后重新运行安装脚本即可。
+飞书凭据只保存在 Git 忽略的 `.env` 中。
 
 查看日志：
 
@@ -121,6 +123,10 @@ tmux attach -t <会话名>
 
 按 `Ctrl-b d` 退出 tmux attach，Codex 仍会在后台常驻。电脑和飞书任一端产生的原生
 事件，都会同步到当前飞书卡片。
+
+这里默认使用普通 `tmux attach`。`tmux -CC` 是 iTerm2 专用 control mode，只有从
+启用了 tmux integration 的 iTerm2 客户端进入时才使用；普通终端使用 `-CC` 不会显示
+标准 TUI。
 
 普通的、非 `tmux-bridge` 创建的 tmux session 也会出现在 `tls` 中；但它们没有 Codex
 thread 元数据，因此不会伪装成可读取原生事件的协同会话。

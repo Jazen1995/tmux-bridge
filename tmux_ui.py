@@ -9,6 +9,7 @@ contents or injects keystrokes.
 from __future__ import annotations
 
 import os
+import pwd
 import re
 import shlex
 import shutil
@@ -53,11 +54,13 @@ class TmuxUIManager:
         enabled: bool,
         socket_path: str,
         codex_bin: str = "codex",
+        runtime_path: str | None = None,
         runner=subprocess.run,
     ):
         self.enabled = enabled
         self.socket_path = socket_path
         self.codex_bin = codex_bin
+        self.runtime_path = runtime_path or os.environ.get("PATH", os.defpath)
         self._run = runner
         self._lock = threading.RLock()
 
@@ -254,7 +257,16 @@ class TmuxUIManager:
 
     def _command(self, thread_id: str, cwd: str, codex_path: str) -> str:
         runner = str(Path(__file__).with_name("tui_runner.sh"))
+        account = pwd.getpwuid(os.getuid())
+        path_entries = [os.path.dirname(codex_path), *self.runtime_path.split(os.pathsep)]
+        effective_path = os.pathsep.join(dict.fromkeys(filter(None, path_entries)))
         return shlex.join([
+            "env",
+            f"HOME={account.pw_dir}",
+            f"USER={account.pw_name}",
+            f"LOGNAME={account.pw_name}",
+            f"SHELL={account.pw_shell or '/bin/sh'}",
+            f"PATH={effective_path}",
             "bash",
             runner,
             "--",

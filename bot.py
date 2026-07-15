@@ -48,6 +48,7 @@ tmux = TmuxUIManager(
     enabled=_bool_env("TMUX_UI_ENABLED", True),
     socket_path=APP_SERVER_SOCKET,
     codex_bin=os.environ.get("CODEX_BIN", "codex"),
+    runtime_path=os.environ.get("TMUX_BRIDGE_PATH"),
 )
 controller = BotController(
     appserver=appserver,

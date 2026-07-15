@@ -22,6 +22,11 @@ if [[ -z "$CODEX_PATH" ]]; then
   echo "找不到 Codex CLI，请先安装 Codex 或在 .env 中配置 CODEX_BIN" >&2
   exit 1
 fi
+RUNTIME_PATH="${TMUX_BRIDGE_PATH:-$PATH}"
+if [[ -z "$RUNTIME_PATH" || "$RUNTIME_PATH" == *$'\n'* ]]; then
+  echo "无法保存当前开发工具 PATH" >&2
+  exit 1
+fi
 
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 APP_SERVER_SOCKET="${APP_SERVER_SOCKET:-$CODEX_HOME/tmux-bridge.sock}"
@@ -49,8 +54,12 @@ for name in http_proxy https_proxy no_proxy LARK_CLI_NO_PROXY; do
   fi
 done
 
-# 本地 Codex TUI 由最小化 PATH 的 systemd/tmux 进程启动，因此保存绝对路径。
-printf 'CODEX_BIN=%s\n' "$CODEX_PATH" > "$ROOT/.runtime.env"
+# 本地 Codex TUI 由最小化 PATH 的 systemd/tmux 进程启动，因此显式保存
+# Codex 绝对路径和安装命令所在登录环境的工具 PATH。
+{
+  printf 'CODEX_BIN=%q\n' "$CODEX_PATH"
+  printf 'TMUX_BRIDGE_PATH=%q\n' "$RUNTIME_PATH"
+} > "$ROOT/.runtime.env"
 chmod 600 "$ROOT/.appserver.env" "$ROOT/.runtime.env"
 
 escape_sed_replacement() {

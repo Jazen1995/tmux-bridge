@@ -61,6 +61,7 @@ def manager(runner):
         enabled=True,
         socket_path="/tmp/codex.sock",
         codex_bin="codex",
+        runtime_path="/developer/bin:/usr/bin",
         runner=runner,
     )
 
@@ -86,8 +87,51 @@ def test_first_thread_creates_its_own_tmux_session_and_remote_tui(monkeypatch, t
     assert "resume thread-123" in command
     assert "--remote unix:///tmp/codex.sock" in command
     assert "tui_runner.sh" in command
+    assert "HOME=" in command
+    assert "USER=" in command
+    assert "LOGNAME=" in command
+    assert "SHELL=" in command
+    assert "PATH=/usr/bin:/developer/bin" in command
     assert any(call[1] == "set-option" and "@codex_thread_id" in call for call in runner.calls)
     assert result.message == "本机 tmux 已创建: my-task"
+
+
+def test_remote_tui_uses_os_account_and_codex_sibling_tools(monkeypatch, tmp_path):
+    def which(name):
+        if name == "tmux":
+            return "/usr/bin/tmux"
+        return "/home/dev/.nvm/versions/node/v22/bin/codex"
+
+    monkeypatch.setattr(tmux_ui.shutil, "which", which)
+    monkeypatch.setattr(
+        tmux_ui.pwd,
+        "getpwuid",
+        lambda _uid: SimpleNamespace(
+            pw_dir="/home/dev",
+            pw_name="dev",
+            pw_shell="/usr/bin/zsh",
+        ),
+    )
+    runner = Runner()
+    instance = TmuxUIManager(
+        enabled=True,
+        socket_path="/tmp/codex.sock",
+        codex_bin="codex",
+        runtime_path="/home/dev/.local/bin:/usr/bin",
+        runner=runner,
+    )
+
+    instance.ensure_session("identity", "thread-identity", str(tmp_path))
+
+    command = next(call for call in runner.calls if call[1] == "respawn-pane")[-1]
+    assert "HOME=/home/dev" in command
+    assert "USER=dev" in command
+    assert "LOGNAME=dev" in command
+    assert "SHELL=/usr/bin/zsh" in command
+    assert (
+        "PATH=/home/dev/.nvm/versions/node/v22/bin:/home/dev/.local/bin:/usr/bin"
+        in command
+    )
 
 
 def test_existing_managed_session_is_not_duplicated(monkeypatch, tmp_path):
